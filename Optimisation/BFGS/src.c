@@ -1,31 +1,37 @@
 #include<stdio.h>
 #include<math.h>
+
 #include<gsl/gsl_vector.h>
 #include<gsl/gsl_matrix.h>
 #include<gsl/gsl_blas.h>
+
 #include"./../RosenBrock/test_f.h"
 
-//int gsl_blas_dgemv(CBLAS_TRANSPOSE_t TransA, double alpha, const gsl_matrix *A, const gsl_vector *x, double beta, gsl_vector *y)
-
-double	get_rosenbrock( const double a, const double b, gsl_vector* v )
+double get_rosenbrock( const double a, const double b, gsl_vector* v )
 {
 	double x = gsl_vector_get(v,0);
 	double y = gsl_vector_get(v,1);
+
 	return RosenBrock(a,b,x,y);
 }
-void	get_drosenbrock( const double a, const double b, gsl_vector* v, gsl_vector* dv )
+
+void get_drosenbrock( const double a, const double b, gsl_vector* v, gsl_vector* dv )
 {
 	double x = gsl_vector_get(v,0);
 	double y = gsl_vector_get(v,1);
 	double w[2];
+
 	D_RosenBrock(a,b,x,y,&w[0]);
-	
+
 	gsl_vector_set(dv,0,w[0]);
 	gsl_vector_set(dv,1,w[1]);
+
 	return;
 }
 
-double	bfgs_ls_subproblem( const double a, const double b, const double c, const gsl_vector* v, const gsl_vector* p )
+// wrappign "test_f" in gsl format
+
+double bfgs_ls_subproblem( const double a, const double b, const double c, const gsl_vector* v, const gsl_vector* p )
 {
 	double ret = 0;
 	gsl_vector* vt = gsl_vector_calloc(2);
@@ -36,10 +42,10 @@ double	bfgs_ls_subproblem( const double a, const double b, const double c, const
 
 	for(int i=0;i<10000;i++)
 	{
-	//int gsl_blas_daxpy(double alpha, const gsl_vector *x, gsl_vector *y)
+		//int gsl_blas_daxpy(double alpha, const gsl_vector *x, gsl_vector *y)
 		gsl_vector_set_zero(vt);
-		gsl_blas_daxpy(1.,v,vt);	// vt += v
-		gsl_blas_daxpy( t,p,vt);	// vt += t*p;
+		gsl_blas_daxpy( 1.,v,vt);	// vt += v
+		gsl_blas_daxpy( t, p,vt);	// vt += t*p;	// i.e., vt = v + t*p
 		
 		bt_std = c - t*0.5*pow(gsl_blas_dnrm2(p),2.);
 		tr_std = get_rosenbrock(a,b,vt);
@@ -58,6 +64,8 @@ double	bfgs_ls_subproblem( const double a, const double b, const double c, const
 	gsl_vector_free(vt);
 	return -1;
 }
+
+// BFGS line-minimiser (in-exact ... backtracking line-search)
 
 gsl_matrix* vwT( const gsl_vector* v, const gsl_vector* w );
 void get_bfgs_H( const gsl_vector* s, const gsl_vector* y, gsl_matrix* H );
@@ -97,7 +105,7 @@ int main( int argc, char* argv[] )
 	{
 
 		cost = get_rosenbrock(a,b,bfgs_v);
-		if ( iter == 0 ) {	get_drosenbrock(a,b,bfgs_v,bfgs_gv);	}
+		if ( iter == 0 ) {	get_drosenbrock(a,b,bfgs_v,bfgs_gv);	}	// estimate f(x), grad f(x) - (only at the first iteration)
 		
 		norm_sq = gsl_blas_dnrm2(bfgs_gv)/(bfgs_v->size);
 		if( norm_sq < 10.E-8 )
@@ -109,46 +117,37 @@ int main( int argc, char* argv[] )
 		iter++;
 		printf("%.4s\t%8.5d\t%12.6lf\t%12.6lf%12.6lf\n","CYC",iter,gsl_vector_get(bfgs_v,0),gsl_vector_get(bfgs_v,1),norm_sq);
 
-
-		// p = - B_inv*gv
+		//	step 1.	search direction 'p'
+		//	p = -H * grad f(x)	// i.e., p = - B_inv*gv
 		gsl_vector_set_zero(bfgs_p);
-		gsl_blas_dgemv(CblasNoTrans,-1.,bfgs_inv_b,bfgs_gv,1.,bfgs_p);
-		
-		// LS-subproblem
-		bfgs_a = bfgs_ls_subproblem(a,b,cost,bfgs_v,bfgs_p);
-		//printf("%lf\n",bfgs_a);
-		//break;
+		gsl_blas_dgemv(CblasNoTrans,-1.,bfgs_inv_b,bfgs_gv,1.,bfgs_p);	// y = a * op(A) * x + b * y
 
-		// set 's_(k)'
+		//	step 2.	find adaptive step-size ... line-search subproblem
+		bfgs_a = bfgs_ls_subproblem(a,b,cost,bfgs_v,bfgs_p);
+
+		// set 's'	... s = a * p
 		gsl_vector_set_zero(bfgs_s);
-		gsl_blas_daxpy(bfgs_a,bfgs_p,bfgs_s);
+		gsl_blas_daxpy(bfgs_a,bfgs_p,bfgs_s);				// y = a * p + y
 		
-		// set 'v_(k+1)'
+		// set 'x+'	... x+ = x + s
 		gsl_vector_set_zero(bfgs_tv);
 		gsl_blas_daxpy(1.,bfgs_v,bfgs_tv);	// tv += v
 		gsl_blas_daxpy(1.,bfgs_s,bfgs_tv);	// tv += s
 
-		// get grad f( v_(k+1) )
+		// get grad f(x+ )
 		get_drosenbrock(a,b,bfgs_tv,bfgs_tgv);
-		// set 'y_(k)'
+
+		// set 'y'	... y = grad f(x+) - grad f(x)
 		gsl_vector_set_zero(bfgs_y);
 		gsl_blas_daxpy(-1.,bfgs_gv,bfgs_y);	// y = -bfgs_gv	
 		gsl_blas_daxpy(1.,bfgs_tgv,bfgs_y);	// y = bfgs_tgv - bfgs-gv
 
-		// update v_(k+1) <- v_(k)
-		// update grad v_(k+1) <- grad v_(k)
-		gsl_vector_memcpy(bfgs_v,bfgs_tv);
-		gsl_vector_memcpy(bfgs_gv,bfgs_tgv);
+		// update x = x+
+		gsl_vector_memcpy(bfgs_v,bfgs_tv);	// f(x+)
+		gsl_vector_memcpy(bfgs_gv,bfgs_tgv);	// grad f(x+)
 
 		// GET INVERSE B
 		get_bfgs_H(bfgs_s,bfgs_y,bfgs_inv_b);
-
-
-//printf("%.4s\t%8.5d\t%12.6lf\t%12.6lf%12.6lf\n","CYC",iter,x,y,sqrt(norm_sq));
-
-
-		// END INVERSE B
-
 	}
 	gsl_vector_free(bfgs_v);
 	gsl_vector_free(bfgs_tv);
@@ -183,27 +182,31 @@ gsl_matrix* vwT( const gsl_vector* v, const gsl_vector* w )
 
 void get_bfgs_H( const gsl_vector* s, const gsl_vector* y, gsl_matrix* H )
 {
-	double c_sy;	gsl_blas_ddot(s,y,&c_sy);
+	// H+ = H + {( sTy + yTHy)/(sTy)/(sTy)} * ssT - {1/(sTy)}*[ (Hy)sT + (syT)H ]
 
-	double c_yHy;
+	double c_sy;	// sTy
+	gsl_blas_ddot(s,y,&c_sy);
+
+	double c_yHy;	// yTHy
 	gsl_vector* Hy = gsl_vector_calloc(H->size1);
 	gsl_blas_dgemv(CblasNoTrans,1.,H,y,0.,Hy);
 	gsl_blas_ddot(y,Hy,&c_yHy);
 
-	gsl_matrix* ss = vwT( s , s );
-	gsl_matrix* Hys = vwT( Hy , s );
-	gsl_matrix* sy = vwT( s , y ); 
+	gsl_matrix* ss = vwT( s , s );		// ssT
+	gsl_matrix* Hys = vwT( Hy , s );	// (Hy)sT
+	gsl_matrix* sy = vwT( s , y ); 		// syT
 
+	// (syT)H
 	gsl_matrix* syH = gsl_matrix_calloc(H->size1,H->size2);
 	gsl_blas_dgemm(CblasNoTrans,CblasNoTrans,1.,sy,H,0.,syH);	// C = a * op(A) * op(B) + b * C
-
 
 	// H
 	// gsl_matrix* H
 
-	// const * ss
+	// const * ssT
 	gsl_matrix_scale(ss, ((c_sy+c_yHy)/c_sy/c_sy) );
-	// const * ( Hys + syH )
+
+	// const * ( (Hy)sT + (syT)*H )
 	gsl_matrix_add(Hys,syH);
 	gsl_matrix_scale(Hys,(-1./c_sy));
 
